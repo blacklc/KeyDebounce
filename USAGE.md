@@ -4,9 +4,11 @@ Per-key keyboard chatter filter for Windows. This document is the reference for
 the main window, the tray menu, `config.txt`, and what to do when a new key
 starts double-typing.
 
-> The UI labels are Chinese (this build is tuned for a Chinese Windows), so each
-> label below is given as **English (中文)**. The product name, file names, tray
-> tooltip and logs are English.
+> **UI language:** the interface is bilingual — English and Chinese — selected
+> automatically from your Windows UI language, and forceable with `--en` / `--zh`
+> (e.g. `KeyDebounce.exe --ui --en`). Both wordings are given below as
+> **English (中文)** so the document works in either mode. The product name, file
+> names, tray tooltip, status file and log prefix are always English.
 
 ---
 
