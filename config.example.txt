@@ -1,0 +1,16 @@
+# KeyDebounce / KeyboardChatterBlocker configuration example.
+# The launcher creates a real config.txt on first run; this file documents the
+# settings it writes and the ones you can add yourself.
+# Format: one "name: value" per line, '#' starts a comment.
+is_enabled: true                 # master switch for the filter engine
+global_chatter: 0                # 0 = keys not listed below are never touched
+minimum_chatter_time: 0          # ignore 0 ms "hits" (buggy inputs only)
+key.E: 50                        # per-key threshold in ms (add one line per key)
+measure_from: Release            # count from the last accepted release (or: Press)
+hide_in_system_tray: true        # engine keeps only a tray icon
+save_stats: true                 # let the engine write blocker_stats.csv on exit
+exclude_injected: false          # keep false to also filter other software's keys
+hotkey_toggle: win + shift + k   # global on/off hotkey
+# Optional per-app escape hatches (README/SECURITY discuss the anti-cheat caveat):
+# auto_disable_programs: wow/some_other_game
+# auto_disable_on_fullscreen: true

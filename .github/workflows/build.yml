@@ -1,0 +1,42 @@
+name: build
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show the toolchain
+        shell: pwsh
+        run: |
+          $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          if (-not (Test-Path $csc)) { Write-Error "csc.exe not found - .NET Framework missing on the runner"; exit 1 }
+          Write-Host "using $csc"
+
+      - name: Build KeyDebounce.exe
+        shell: pwsh
+        run: |
+          $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          & $csc /nologo /target:winexe /optimize+ /warnaserror- `
+            /out:KeyDebounce.exe `
+            /r:System.Windows.Forms.dll /r:System.Drawing.dll `
+            src\KeyDebounce.cs src\KeyDebounce.Ui.cs src\Lang.cs
+          if ($LASTEXITCODE -ne 0) { Write-Error "compile failed"; exit 1 }
+          Get-Item KeyDebounce.exe | Select-Object Name, Length
+
+      - name: Verify every UI string has a translation
+        shell: pwsh
+        run: python tools\wrap_i18n.py check src\Lang.cs src\KeyDebounce.cs src\KeyDebounce.Ui.cs
+
+      - name: Upload the build
+        uses: actions/upload-artifact@v4
+        with:
+          name: KeyDebounce-exe
+          path: KeyDebounce.exe
+          if-no-files-found: error

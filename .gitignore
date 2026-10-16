@@ -1,0 +1,41 @@
+# ---------------------------------------------------------------- build output
+*.exe
+*.dll
+*.pdb
+*.obj
+
+# ------------------------------------------------- third-party engine binary
+# KeyboardChatterBlocker.exe is redistributed in the release archive (with its
+# MIT license reproduced in THIRD-PARTY-NOTICES.md) but deliberately not stored
+# in this repository as a binary blob.
+KeyboardChatterBlocker.exe
+
+# ------------------------------------------------------- runtime state (yours)
+# Written while the app runs; contains machine-specific paths, your thresholds
+# and a metadata log of suppressed keystrokes. Never publish these.
+KeyDebounce.log
+KeyDebounce.status
+blocker_stats.csv
+config.txt
+config.txt.bak
+.restarting
+
+# ------------------------------------------------------------------- editor/IDE
+.vs/
+.vscode/
+*.user
+*.suo
+*.sln
+bin/
+obj/
+
+# ----------------------------------------------------------------------- Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ------------------------------------------------------------------------- OS
+Thumbs.db
+desktop.ini
+.DS_Store
