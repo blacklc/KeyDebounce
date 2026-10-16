@@ -537,6 +537,7 @@ static class KeyDebounce
                        "tray_icon=" + (running ? "green" : "red") + "\r\n" +
                        "threshold_ms=" + CurrentThreshold() + "\r\n" +
                        "autostart=" + (AutostartEnabled() ? "on" : "off") + "\r\n" +
+                       "version=" + AppInfo.Version + "\r\n" +
                        "updated=" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
             File.WriteAllText(Path.Combine(dir, "KeyDebounce.status"), s, new UTF8Encoding(false));
         }

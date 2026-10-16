@@ -968,7 +968,7 @@ class MainForm : Form
 
     public MainForm(string startTab, bool includeInjected)
     {
-        Text = L.T("KeyDebounce — 主界面");
+        Text = L.T("KeyDebounce — 主界面") + "   v" + AppInfo.Version;
         ClientSize = new Size(772, 512);
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Microsoft YaHei UI", 9f);

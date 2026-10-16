@@ -26,9 +26,21 @@ jobs:
           & $csc /nologo /target:winexe /optimize+ /warnaserror- `
             /out:KeyDebounce.exe `
             /r:System.Windows.Forms.dll /r:System.Drawing.dll `
-            src\KeyDebounce.cs src\KeyDebounce.Ui.cs src\Lang.cs
+            src\KeyDebounce.cs src\KeyDebounce.Ui.cs src\Lang.cs src\Version.cs
           if ($LASTEXITCODE -ne 0) { Write-Error "compile failed"; exit 1 }
           Get-Item KeyDebounce.exe | Select-Object Name, Length
+
+      - name: Check VERSION, source and exe agree
+        shell: pwsh
+        run: |
+          $want = (Get-Content VERSION -Raw).Trim()
+          $src  = (Select-String -Path src\Version.cs -Pattern 'const string Version = "([^"]+)"').Matches[0].Groups[1].Value
+          $exe  = (Get-Item KeyDebounce.exe).VersionInfo.FileVersion
+          Write-Host "VERSION=$want   src/Version.cs=$src   exe FileVersion=$exe"
+          if ($want -ne $src) { Write-Error "VERSION ($want) and src/Version.cs ($src) disagree"; exit 1 }
+          if (-not $exe.StartsWith($want)) { Write-Error "exe version ($exe) does not start with VERSION ($want)"; exit 1 }
+          $log = Select-String -Path CHANGELOG.md -Pattern "^## \[$want\]" -Quiet
+          if (-not $log) { Write-Error "CHANGELOG.md has no [$want] section"; exit 1 }
 
       - name: Verify every UI string has a translation
         shell: pwsh
