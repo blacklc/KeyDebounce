@@ -78,13 +78,24 @@ static class KeyDebounce
     static DateTime nextRestartAttempt = DateTime.MinValue;
     static int restartCount;
 
+    // Intercept mirror. Lives HERE (not in the UI window) so that "which press
+    // did the engine drop, and by how many ms" is recorded for the whole
+    // boot-to-shutdown session -- not only while a window happens to be open.
+    static ChatterMirror mirror;
+    static KeyboardObserver mirrorObs;
+    static int mirrorEnginePid;
+    static DateTime mirrorReinstallAt = DateTime.MinValue;   // engine just (re)started
+    static bool allowInjected;                    // --allow-injected (debug/QA)
+
     [DllImport("user32.dll", SetLastError = true)]
     static extern bool DestroyIcon(IntPtr hIcon);
 
     [STAThread]
     static void Main(string[] args)
     {
-        L.SetFromArgs(args);   // --en / --zh override the auto-detected UI language
+        L.SetFromArgs(args);
+        foreach (string a in args)
+            if (a.ToLowerInvariant() == "--allow-injected") allowInjected = true;   // --en / --zh select the UI language
 
         // Tool windows run in their own short-lived process and deliberately
         // bypass the tray instance's mutex: no tray icon, no engine start.
@@ -141,6 +152,7 @@ static class KeyDebounce
 
             StartEngine(false);
             BuildTray();
+            StartMirror();        // record intercepts for the whole session, UI or not
             lastKnownRunning = EngineRunning();
 
             poll = new System.Windows.Forms.Timer();
@@ -164,6 +176,19 @@ static class KeyDebounce
         catch { return false; }
     }
 
+    /// The engine's process id, or 0 when it is not running. The intercept mirror
+    /// uses it to notice an engine restart: a fresh engine installs a keyboard
+    /// hook newer than ours, which would hide blocked presses from us.
+    static int EnginePid()
+    {
+        try
+        {
+            Process[] ps = Process.GetProcessesByName(EngineName);
+            return ps.Length > 0 ? ps[ps.Length - 1].Id : 0;
+        }
+        catch { return 0; }
+    }
+
     static void StartEngine(bool quiet)
     {
         if (EngineRunning())
@@ -178,6 +203,10 @@ static class KeyDebounce
             psi.UseShellExecute = true;
             Process p = Process.Start(psi);
             Log(L.T("已启动引擎，pid=") + p.Id);
+            // The engine installs its keyboard hook a moment AFTER starting, so ours
+            // would be the older one. Re-hook a few seconds later to stay newest in
+            // the chain (the mirror only sees unfiltered events while it is newest).
+            mirrorReinstallAt = DateTime.Now.AddSeconds(3);
             if (!quiet) Balloon(L.T("KeyDebounce已启动"), L.T("引擎正在运行：只过滤 E 键（50ms），其它按键不受影响。"));
         }
         catch (Exception ex)
@@ -201,6 +230,62 @@ static class KeyDebounce
         }
         catch (Exception ex) { Log(L.T("停止引擎失败: ") + ex.Message); }
         UpdateStatus(true);
+    }
+
+    // ---------- intercept mirror ----------
+
+    /// The mirror runs in THIS process on purpose: it must keep recording from
+    /// boot to shutdown, not only while the UI window happens to be open. It also
+    /// writes KeyDebounce.stats, which is what the UI displays -- so counters no
+    /// longer reset when the window is closed and reopened.
+    static void StartMirror()
+    {
+        if (mirror == null)
+        {
+            mirror = new ChatterMirror();
+            mirror.Active = true;
+            mirror.IncludeInjected = allowInjected;
+            mirror.Line += delegate(string line) { Log(L.T("拦截  ") + line); };
+        }
+        InstallMirrorHook();
+    }
+
+    /// Windows calls low-level keyboard hooks newest-first, so our hook sees the
+    /// unfiltered stream only while it is the most recent one. Every engine
+    /// (re)start installs a hook newer than ours, which would leave us observing
+    /// only survivors -- hence the reinstall whenever the engine pid changes.
+    static void InstallMirrorHook()
+    {
+        try
+        {
+            if (mirrorObs != null) { mirrorObs.Dispose(); mirrorObs = null; }
+            mirrorObs = new KeyboardObserver();
+            mirrorObs.Key += mirror.OnKey;
+            mirrorEnginePid = EnginePid();
+            Log("mirror hook installed (engine pid=" + mirrorEnginePid + ")");
+        }
+        catch (Exception ex) { Log("mirror hook failed: " + ex.Message); }
+    }
+
+    /// Machine-readable live counters for the UI and for scripting.
+    static void WriteMirrorStats()
+    {
+        if (mirror == null) return;
+        try
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.Append("# KeyDebounce live counters -- written by the tray launcher.\r\n");
+            sb.Append("# key,threshold_ms,presses,blocked,last_intercept\r\n");
+            foreach (string[] row in mirror.RawSnapshot())
+                sb.Append(row[0]).Append(',').Append(row[1]).Append(',')
+                  .Append(row[2]).Append(',').Append(row[3]).Append(',')
+                  .Append(row[4]).Append("\r\n");
+            sb.Append("# updated=").Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"))
+              .Append("\r\n");
+            File.WriteAllText(Path.Combine(dir, "KeyDebounce.stats"), sb.ToString(),
+                              new UTF8Encoding(false));
+        }
+        catch { }
     }
 
     // ---------- config ----------
@@ -379,6 +464,22 @@ static class KeyDebounce
         bool restarting = false;
         try { restarting = File.Exists(Path.Combine(dir, ".restarting")); }
         catch { }
+
+        // Keep the intercept mirror accurate and alive.
+        if (mirror != null)
+        {
+            mirror.Active = running;
+            int pid = EnginePid();
+            bool engineChanged = (pid != 0 && pid != mirrorEnginePid);
+            bool scheduled = (mirrorReinstallAt != DateTime.MinValue &&
+                              DateTime.Now >= mirrorReinstallAt);
+            if (engineChanged || scheduled)
+            {
+                mirrorReinstallAt = DateTime.MinValue;
+                InstallMirrorHook();
+            }
+            WriteMirrorStats();
+        }
 
         if (running != lastKnownRunning)
         {
@@ -565,9 +666,25 @@ static class KeyDebounce
     {
         try
         {
+            RotateLogIfNeeded();
             File.AppendAllText(logPath,
                 DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + message + "\r\n",
                 new UTF8Encoding(false));
+        }
+        catch { }
+    }
+
+    /// This process logs for the whole boot-to-shutdown session (engine events,
+    /// self-heal, every suppressed bounce), so the file needs a ceiling.
+    static void RotateLogIfNeeded()
+    {
+        try
+        {
+            FileInfo fi = new FileInfo(logPath);
+            if (!fi.Exists || fi.Length < 2 * 1024 * 1024) return;
+            string previous = logPath + ".1";
+            if (File.Exists(previous)) File.Delete(previous);
+            File.Move(logPath, previous);
         }
         catch { }
     }

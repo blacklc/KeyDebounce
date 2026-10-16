@@ -146,12 +146,19 @@ guessing — both only ever write names the engine accepts.
 ## 5. The live intercept mirror, and why it exists
 
 The engine writes `blocker_stats.csv` only when it saves its own config, so that
-file cannot drive a live view. KeyDebounce therefore installs its **own**
+file cannot drive a live view. The **tray launcher** therefore installs its own
 keyboard hook *after* the engine's. Windows calls hook procedures newest-first,
 so this hook sees the stream **before** the engine filters it, replays the
-engine's rule, and reports exactly which presses were suppressed and by how many
+engine's rule, and records exactly which presses were suppressed and by how many
 milliseconds. That is the source of the `概览` counters and the `日志` intercept
 lines.
+
+Because the mirror runs in the launcher rather than in a window, intercept
+recording covers the **whole session** — closing the main window does not stop it
+(it used to: the mirror lived in that window's process). The counters are
+published in `KeyDebounce.stats`, so they also persist across closing and
+reopening the window. When the engine restarts, the launcher re-installs its hook
+so that it stays the newest one in the chain.
 
 ---
 
@@ -215,7 +222,9 @@ Tab shortcuts     --manage (filter keys)  --scan (chatter scan)
                   --log (live log)        --config (raw config)
 Config            config.txt                       ← per-key thresholds
 Live state        KeyDebounce.status               ← e_key_filter / tray_icon / threshold_ms / autostart
-Logs              KeyDebounce.log                  ← launcher events + every intercept
+Live counters     KeyDebounce.stats                ← per-key presses / blocked / last intercept (written by the launcher)
+Logs              KeyDebounce.log                  ← launcher events + every suppress, whole session
+                  KeyDebounce.log.1                ← previous log, kept when the log rotates at 2 MB
 Diagnostics       blocker_stats.csv                ← the engine's own counters
 Rebuild           src\build.cmd                    ← uses the in-box .NET compiler
 Uninstall         tray → Quit (stop engine) → delete folder → delete Startup shortcut

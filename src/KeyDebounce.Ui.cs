@@ -47,6 +47,9 @@ static class Cfg
     public static string StatsPath { get { return Path.Combine(Dir, "blocker_stats.csv"); } }
     public static string Marker { get { return Path.Combine(Dir, ".restarting"); } }
 
+    /// Live intercept counters written by the tray launcher (KeyDebounce.cs).
+    public static string MirrorStatsPath { get { return Path.Combine(Dir, "KeyDebounce.stats"); } }
+
     public static string StartupLnk
     {
         get
@@ -87,6 +90,18 @@ static class Cfg
                 list.Add(new KeyValuePair<string, string>(name.Substring(4), val));
         }
         return list;
+    }
+
+    /// How many keys are actually filtered (a key.* entry with a non-zero value).
+    public static int FilteredKeyCount()
+    {
+        int n = 0;
+        foreach (KeyValuePair<string, string> kv in LoadKeys())
+        {
+            int ms;
+            if (int.TryParse(kv.Value, out ms) && ms > 0) n++;
+        }
+        return n;
     }
 
     public static string ReadSetting(string setting)
@@ -201,6 +216,13 @@ static class Cfg
     {
         try
         {
+            FileInfo fi = new FileInfo(LogPath);
+            if (fi.Exists && fi.Length > 2 * 1024 * 1024)
+            {
+                string previous = LogPath + ".1";
+                if (File.Exists(previous)) File.Delete(previous);
+                File.Move(LogPath, previous);
+            }
             File.AppendAllText(LogPath,
                 DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + line + "\r\n",
                 new UTF8Encoding(false));
@@ -331,7 +353,8 @@ class ChatterMirror
 {
     class KeyState
     {
-        public double LastAcceptedDown = -1;
+        public double LastLoggedMs = -1e9;
+    public double LastAcceptedDown = -1;
         public double LastAcceptedUp = -1;
         public bool PressAccepted;
         public int Presses, Blocked;
@@ -397,6 +420,28 @@ class ChatterMirror
         return rows;
     }
 
+    /// Raw values for the launcher's machine-readable stats file, as opposed to
+    /// the localised display strings Snapshot() produces for the UI.
+    public List<string[]> RawSnapshot()
+    {
+        List<string[]> rows = new List<string[]>();
+        foreach (KeyValuePair<int, KeyState> kv in state)
+        {
+            KeyState s = kv.Value;
+            int thr;
+            bool filtered = thresholds.TryGetValue(kv.Key, out thr);
+            rows.Add(new string[]
+            {
+                KeyNames.FromVk(kv.Key),
+                filtered ? thr.ToString() : "0",
+                s.Presses.ToString(),
+                filtered ? s.Blocked.ToString() : "0",
+                s.LastBlockedTime
+            });
+        }
+        return rows;
+    }
+
     public void OnKey(int vk, bool isDown, bool injected)
     {
         if (!Active) return;
@@ -431,9 +476,19 @@ class ChatterMirror
             s.Blocked++;
             s.PressAccepted = false;          // its release must not reset the clock
             s.LastBlockedTime = DateTime.Now.ToString("HH:mm:ss");
-            if (Line != null && s.Blocked <= LogLineCap)
-                Line(KeyNames.Pretty(KeyNames.FromVk(vk)) + L.T("  拦下一次抖动：距上次 ") +
-                     gap.ToString("0.0") + L.T("ms  < 阈值 ") + thresholds[vk] + "ms");
+            if (Line != null)
+            {
+                // The launcher logs for the whole session now, so a hard cap would
+                // silently stop recording once a key has bounced a lot. Log the
+                // first LogLineCap per key in full, then at most one line per
+                // second per key, so a busy key cannot flood the file.
+                if (s.Blocked <= LogLineCap || now - s.LastLoggedMs >= 1000)
+                {
+                    s.LastLoggedMs = now;
+                    Line(KeyNames.Pretty(KeyNames.FromVk(vk)) + L.T("  拦下一次抖动：距上次 ") +
+                         gap.ToString("0.0") + L.T("ms  < 阈值 ") + thresholds[vk] + "ms");
+                }
+            }
         }
         else
         {
@@ -906,14 +961,10 @@ class MainForm : Form
     TextBox logBox, cfgBox;
     CheckBox autoScroll;
     Timer tick;
-    ChatterMirror mirror = new ChatterMirror();
-    KeyboardObserver mirrorObs;
     ManagerForm mgr;
     ScannerForm scan;
-    List<string> pendingLog = new List<string>();
     long lastLogLen = -1;
     int tickCount;
-    bool wasRunning;
 
     public MainForm(string startTab, bool includeInjected)
     {
@@ -955,15 +1006,11 @@ class MainForm : Form
         else if (startTab == "log") tabs.SelectedIndex = 3;
         else if (startTab == "config") tabs.SelectedIndex = 4;
 
-        mirror.Line += OnMirrorLine;
-        mirror.IncludeInjected = includeInjected;
-        mirror.Active = false;
-
-        // Feed the mirror: our hook is installed after the engine's, and Windows
-        // runs hooks newest-first, so this observer sees the stream BEFORE the
-        // engine filters it.
-        mirrorObs = new KeyboardObserver();
-        mirrorObs.Key += mirror.OnKey;
+        // The intercept mirror lives in the tray launcher, not here: it must keep
+        // recording for the whole session, and its counters have to survive
+        // closing and reopening this window. They reach us through
+        // KeyDebounce.stats. includeInjected is kept for CLI compatibility and
+        // applies to the launcher (KeyDebounce.exe --allow-injected).
 
         tick = new Timer();
         tick.Interval = 1000;
@@ -972,7 +1019,7 @@ class MainForm : Form
 
         LoadConfigIntoBox();
         OnTick();
-        FormClosed += delegate { tick.Stop(); mirrorObs.Dispose(); };
+        FormClosed += delegate { tick.Stop(); };
     }
 
     void BuildOverview(TabPage p)
@@ -1042,7 +1089,6 @@ class MainForm : Form
     void Act(string msg)
     {
         Cfg.AppendLog(msg);
-        pendingLog.Add(msg);
         OnTick();
     }
 
@@ -1064,12 +1110,12 @@ class MainForm : Form
         Button reload = new Button();
         reload.Text = L.T("重新载入");
         reload.SetBounds(190, 414, 90, 26);
-        reload.Click += delegate { lastLogLen = -1; pendingLog.Clear(); RefreshLog(); };
+        reload.Click += delegate { lastLogLen = -1; RefreshLog(); };
 
         Button clearView = new Button();
         clearView.Text = L.T("清空显示");
         clearView.SetBounds(288, 414, 90, 26);
-        clearView.Click += delegate { logBox.Text = ""; pendingLog.Clear(); };
+        clearView.Click += delegate { logBox.Text = ""; };
 
         Button openLog = new Button();
         openLog.Text = L.T("打开日志文件");
@@ -1142,7 +1188,6 @@ class MainForm : Form
             Cfg.AppendLog(L.T("配置文件被直接编辑并保存"));
             string msg = Cfg.RestartEngine();
             mgr.Reload();
-            mirror.Reload();
             MessageBox.Show(L.T("已保存。\r\n") + msg, "KeyDebounce");
             LoadConfigIntoBox();
         }
@@ -1176,11 +1221,7 @@ class MainForm : Form
     void OnTick()
     {
         bool running = Cfg.EngineRunning();
-        mirror.Active = running;
-        if (running && !wasRunning) mirror.Reset();
-        wasRunning = running;
-
-        int filtered = mirror.FilteredKeyCount;
+        int filtered = Cfg.FilteredKeyCount();
         lblState.ForeColor = running ? Color.FromArgb(30, 130, 50) : Color.FromArgb(170, 50, 50);
         lblState.Text = running ? L.T("● 正在过滤") : L.T("● 未在过滤");
 
@@ -1194,7 +1235,6 @@ class MainForm : Form
 
         tickCount++;
         if (tickCount % 2 == 0) RefreshStats();
-        if (tickCount % 5 == 0) mirror.Reload();
         RefreshLog();
     }
 
@@ -1202,12 +1242,31 @@ class MainForm : Form
     {
         statList.BeginUpdate();
         statList.Items.Clear();
-        foreach (string[] row in mirror.Snapshot())
+
+        // Counters come from the tray launcher (KeyDebounce.stats), which runs
+        // from boot to shutdown -- so they keep accumulating while this window is
+        // closed, instead of resetting on every reopen.
+        try
         {
-            ListViewItem item = new ListViewItem(row[0]);
-            for (int i = 1; i < row.Length; i++) item.SubItems.Add(row[i]);
-            statList.Items.Add(item);
+            if (File.Exists(Cfg.MirrorStatsPath))
+            {
+                foreach (string raw in File.ReadAllLines(Cfg.MirrorStatsPath))
+                {
+                    string line = raw.Trim();
+                    if (line.Length == 0) continue;
+                    if (line[0] == '#') continue;
+                    string[] f = line.Split(',');
+                    if (f.Length < 5) continue;
+                    ListViewItem item = new ListViewItem(KeyNames.Pretty(f[0]));
+                    item.SubItems.Add(f[1] == "0" ? L.T("不过滤") : f[1] + " ms");
+                    item.SubItems.Add(f[2]);
+                    item.SubItems.Add(f[3]);
+                    item.SubItems.Add(f[4]);
+                    statList.Items.Add(item);
+                }
+            }
         }
+        catch { }
         statList.EndUpdate();
 
         string statsInfo = L.T("尚未生成");
@@ -1226,32 +1285,39 @@ class MainForm : Form
                         L.T("blocker_stats.csv（当前：") + statsInfo + L.T("）。");
     }
 
-    void OnMirrorLine(string line)
-    {
-        Cfg.AppendLog(L.T("拦截  ") + line);
-        pendingLog.Add(line);
-    }
-
     void RefreshLog()
     {
         try
         {
-            if (pendingLog.Count > 0)
-            {
-                StringBuilder sb = new StringBuilder();
-                foreach (string l in pendingLog)
-                    sb.Append(DateTime.Now.ToString("HH:mm:ss")).Append("  ").Append(l).Append("\r\n");
-                pendingLog.Clear();
-                logBox.AppendText(sb.ToString());
-                if (autoScroll.Checked) { logBox.SelectionStart = logBox.Text.Length; logBox.ScrollToCaret(); }
-            }
-
             if (!File.Exists(Cfg.LogPath)) return;
             long len = new FileInfo(Cfg.LogPath).Length;
             if (len == lastLogLen) return;
             lastLogLen = len;
 
-            string all = File.ReadAllText(Cfg.LogPath, Encoding.UTF8).Replace("\r\n", "\n");
+            // Read only the tail: the log now runs from boot to shutdown, so
+            // slurping the whole file every second would get slower the longer
+            // the session lives.
+            const int windowBytes = 64 * 1024;
+            long start = len > windowBytes ? len - windowBytes : 0;
+            byte[] buf = new byte[len - start];
+            using (FileStream fs = new FileStream(Cfg.LogPath, FileMode.Open,
+                                                  FileAccess.Read, FileShare.ReadWrite))
+            {
+                fs.Seek(start, SeekOrigin.Begin);
+                int got = 0;
+                while (got < buf.Length)
+                {
+                    int n = fs.Read(buf, got, buf.Length - got);
+                    if (n <= 0) break;
+                    got += n;
+                }
+            }
+            string all = Encoding.UTF8.GetString(buf, 0, buf.Length).Replace("\r\n", "\n");
+            if (start > 0)
+            {
+                int nl = all.IndexOf('\n');       // drop the partially-read first line
+                if (nl >= 0) all = all.Substring(nl + 1);
+            }
             string[] lines = all.Split('\n');
             int take = Math.Min(lines.Length, 400);
             StringBuilder tail = new StringBuilder();

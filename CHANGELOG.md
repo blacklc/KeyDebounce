@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] — 2026-10-16
+
+### Fixed
+
+- **Intercept recording stopped as soon as the main window was closed.** The mirror
+  (and its keyboard hook) used to live in the UI process, so `KeyDebounce.log` only
+  gained "suppressed bounce" lines while a window happened to be open, and the counters
+  reset every time the window was reopened. The mirror now runs in the **tray
+  launcher** — it re-installs its hook whenever the engine (re)starts, so it stays the
+  newest hook in the chain and keeps observing the **unfiltered** stream — and
+  publishes live counters to `KeyDebounce.stats`, which is what the Overview tab
+  displays. Closing the window no longer affects recording or counters.
+- Log tail view read the entire file on every refresh and re-rendered lines that had
+  come from the file; it now reads only the last 64 KB and shows what is on disk.
+- Log rotation at 2 MB (`KeyDebounce.log.1`), because the log now grows for the whole
+  boot-to-shutdown session.
+- A busy key is no longer dropped from the log after 200 lines: the first 200 are
+  logged in full, then at most one line per second per key.
+
 ## [1.0.0] — 2026-10-16
 
 First public release. The project started as a single-purpose fix for one chattering

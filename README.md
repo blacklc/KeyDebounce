@@ -53,6 +53,8 @@ Full instructions: **[INSTALL.md](INSTALL.md)** · configuration reference and U
 ```
 KeyDebounce/
 ├─ src/                     C# source (C# 5, in-box compiler)
+│  (runtime files the app writes — config.txt, KeyDebounce.log/.status/.stats,
+│   blocker_stats.csv — are gitignored)
 │  ├─ KeyDebounce.cs        tray launcher, config, self-heal, engine lifecycle
 │  ├─ KeyDebounce.Ui.cs     main window, key manager, scanner, live mirror
 │  ├─ Lang.cs               English/Chinese translation table

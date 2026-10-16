@@ -15,6 +15,8 @@ KeyboardChatterBlocker.exe
 # and a metadata log of suppressed keystrokes. Never publish these.
 KeyDebounce.log
 KeyDebounce.status
+KeyDebounce.stats
+KeyDebounce.log.1
 blocker_stats.csv
 config.txt
 config.txt.bak
